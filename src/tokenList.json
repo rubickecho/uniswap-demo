@@ -33,12 +33,5 @@
     "name": "weirdo",
     "address": "0x76734b57dfe834f102fb61e1ebf844adf8dd931e",
     "decimals": 8
-  },
-  {
-    "ticker": "GME",
-    "img": "https://basescan.org/assets/base/images/svg/empty-token.svg?v=24.6.1.0",
-    "name": "GameStop",
-    "address": "0xbeb0fd48c2ba0f1aacad2814605f09e08a96b94e",
-    "decimals": 9
   }
 ]

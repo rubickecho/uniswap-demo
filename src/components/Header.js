@@ -13,15 +13,11 @@ function Header() {
         <Link to="/" className="link">
           <div className="headerItem">Swap</div>
         </Link>
-        <Link to="/tokens" className="link">
+        {/* <Link to="/tokens" className="link">
           <div className="headerItem">Tokens</div>
-        </Link>
+        </Link> */}
       </div>
       <div className="rightH">
-        <div className="headerItem">
-          {/* <img src={Base} alt="base" className="eth" /> */}
-          Base Chain
-        </div>
         <ConnectButton />
       </div>
     </header>

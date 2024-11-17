@@ -13,18 +13,18 @@ import {
   arbitrum,
   base,
   sepolia,
+	baseSepolia
 } from "wagmi/chains";
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import { infura_connection, infura_connection_base } from "./resource";
 
 const config = getDefaultConfig({
   appName: "My RainbowKit App",
-  projectId: "YOUR_PROJECT_ID",
-  chains: [base],
+  projectId: "uniswap-demo-001",
+  chains: [sepolia],
   ssr: true, // If your dApp uses server side rendering (SSR)
   transports: {
-    // [mainnet.id]: http(infura_connection),
-    [base.id]: http(infura_connection_base),
+    [sepolia.id]: http(infura_connection_base),
   },
 });
 
