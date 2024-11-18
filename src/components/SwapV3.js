@@ -7,7 +7,18 @@ import {
 } from "@ant-design/icons";
 // import tokenList from "../tokenList.json";
 import tokenList from "../autoTokenList.json";
-import { Route, Pair, Trade } from "@uniswap/v2-sdk";
+import {
+	Pool,
+	Route,
+	Trade,
+	FeeAmount,
+	SwapQuoter,
+	SwapRouter,
+	TickMath,
+	TICK_SPACINGS,
+	TickListDataProvider,
+	nearestUsableTick
+} from '@uniswap/v3-sdk'
 import { Token, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
 // import {
 // 	ChainId,
@@ -16,11 +27,85 @@ import { Token, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
 // 	TradeType
 // } from "@uniswap/sdk-core";
 import { ethers } from "ethers";
-import { infura_connection_base, pair_abi, router_abi } from "../resource";
+import { infura_connection_base, infura_connection_testnet, pool_abi, router_abi } from "../resource";
 import { useAccount, useWriteContract, useReadContract, useChainId } from "wagmi";
 import { ROUTER_ADDRESSES } from "../contracts";
 
-function Swap() {
+// 缓存 tick 数据
+const ticksCache = new Map();
+
+// 添加所有可能的费率常量
+const FEE_AMOUNTS = [
+  // FeeAmount.LOWEST,  // 0.01%
+  // FeeAmount.LOW,     // 0.05%
+  FeeAmount.MEDIUM,  // 0.3%
+  // FeeAmount.HIGH     // 1%
+];
+
+// 获取 tick 范围的函数
+function getTickRange(currentTick, tickSpacing) {
+	// 获取最近的可用 tick
+	const nearestTick = nearestUsableTick(currentTick, tickSpacing);
+
+	// 计算范围 (当前 tick 上下各 10 个 tick spacing)
+	const numTicksAround = 10;
+	const minTick = nearestTick - (tickSpacing * numTicksAround);
+	const maxTick = nearestTick + (tickSpacing * numTicksAround);
+
+	return { minTick, maxTick, tickSpacing };
+}
+
+// 获取 Tick 数据的函数
+async function getPoolTicks(poolContract, feeAmount) {
+	try {
+		// 1. 获取当前 tick
+		const slot0 = await poolContract.slot0();
+		const currentTick = slot0.tick;
+
+		// 2. 获取 tick 范围
+		const { minTick, maxTick, tickSpacing } = getTickRange(
+			currentTick,
+			TICK_SPACINGS[feeAmount]
+		);
+
+		console.log("Fetching ticks in range:", {
+			currentTick,
+			minTick,
+			maxTick,
+			tickSpacing
+		});
+
+		// 3. 构建 tick 数组
+		const tickPromises = [];
+		for (let i = minTick; i <= maxTick; i += tickSpacing) {
+			tickPromises.push(poolContract.ticks(i));
+		}
+
+		// 4. 并行获取所有 tick 数据
+		const tickResults = await Promise.all(tickPromises);
+
+		// 5. 处理结果
+		const ticks = tickResults
+			.map((tickData, i) => {
+				const tick = minTick + (i * tickSpacing);
+				return {
+					index: tick,
+					liquidityNet: tickData.liquidityNet,
+					liquidityGross: tickData.liquidityGross
+				};
+			})
+			.filter(tick => tick.liquidityGross.gt(0)); // 只保留有流动性的 tick
+
+		console.log(`Found ${ticks.length} initialized ticks`);
+		return ticks;
+
+	} catch (error) {
+		console.error("Error fetching ticks:", error);
+		throw error;
+	}
+}
+
+function SwapV3() {
 	// 获取当前网络
 	const chainId = useChainId();
 	console.log("当前网络: " + chainId);
@@ -165,92 +250,164 @@ const validateRouterAddress = (address) => {
 		return combined;
 	};
 
-	// 【1.代币信息获取阶段】创建交易对实例
-	async function createPair(tokenOneInstance, tokenTwoInstance) {
+	// 创建池子的函数
+	async function createPool(tokenOneInstance, tokenTwoInstance) {
 		try {
-			// 获取 pair 地址
-			const pairAddress = Pair.getAddress(tokenOneInstance, tokenTwoInstance);
-			// router v2 02:  0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D
-			// router v2 02 base:  0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24
+			for (const feeAmount of FEE_AMOUNTS) {
+				try {
+					// 1. 获取池子地址
+					let poolAddress = Pool.getAddress(
+						tokenOneInstance,
+						tokenTwoInstance,
+						feeAmount
+					);
+					poolAddress = "0xb8b672bdd9cff3d0979e7344c7358ca12e78a1f0";
+					console.log(`Checking pool with fee ${feeAmount/10000}%:`, poolAddress);
 
-			// Setup provider, import necessary ABI ...
-			// 创建一个 JSON-RPC Provider 实例来连接 Base 网络
-			// 通过 infura_connection_base 这个 RPC URL 来访问区块链节点
-			// 这个 provider 对象用于后续与区块链交互,比如读取合约状态等
-			const provider = new ethers.providers.JsonRpcProvider(
-				infura_connection_base
-			);
+					// 2. 检查缓存
+					if (ticksCache.has(poolAddress)) {
+						console.log("Using cached tick data");
+						const cachedData = ticksCache.get(poolAddress);
+						return cachedData.pool;
+					}
 
-			// 获取 pair 合约实例
-			const pairContract = new ethers.Contract(pairAddress, pair_abi, provider);
-			// 获取储备量
-			const reserves = await pairContract["getReserves"]();
-			const [reserve0, reserve1] = reserves;
+					// 3. 获取 provider
+					const provider = new ethers.providers.JsonRpcProvider(
+						chainId === 11155111 ? infura_connection_testnet : infura_connection_base
+					);
 
-			const tokens = [tokenOneInstance, tokenTwoInstance];
-			const [token0, token1] = tokens[0].sortsBefore(tokens[1])
-				? tokens
-				: [tokens[1], tokens[0]];
+					// 4. 验证合约存在
+					const code = await provider.getCode(poolAddress);
+					if (code === '0x') {
+						console.log(`Pool does not exist for fee ${feeAmount/10000}%`);
+						continue;
+					}
 
-			// 是的,这里创建了一个交易对(Pair)实例
-			// 使用 token0 和 token1 的储备量(reserve0, reserve1)来初始化
-			// CurrencyAmount.fromRawAmount 用于将原始数量转换为带精度的货币数量
-			const pair = new Pair(
-				CurrencyAmount.fromRawAmount(token0, reserve0),
-				CurrencyAmount.fromRawAmount(token1, reserve1)
-			);
-			return pair;
+					// 5. 创建合约实例
+					const poolContract = new ethers.Contract(poolAddress, pool_abi, provider);
+
+					// 6. 获取池子状态
+					const [slot0, liquidity] = await Promise.all([
+						poolContract.slot0(),
+						poolContract.liquidity()
+					]);
+
+					// 7. 验证流动性
+					if (liquidity.eq(0)) {
+						console.log(`No liquidity in pool with fee ${feeAmount/10000}%`);
+						continue;
+					}
+
+					// 8. 获取 ticks 数据
+					const ticks = await getPoolTicks(poolContract, feeAmount);
+					if (!ticks || ticks.length === 0) {
+						console.log(`No valid ticks found for fee ${feeAmount/10000}%`);
+						continue;
+					}
+
+					// 9. 创建 TickListDataProvider
+					const tickDataProvider = new TickListDataProvider(ticks, TICK_SPACINGS[feeAmount]);
+
+					// 10. 创建池子实例
+					const pool = new Pool(
+						tokenOneInstance,
+						tokenTwoInstance,
+						feeAmount,
+						slot0.sqrtPriceX96.toString(),
+						liquidity.toString(),
+						slot0.tick,
+						tickDataProvider
+					);
+
+					// 11. 缓存数据
+					ticksCache.set(poolAddress, {
+						pool,
+						ticks,
+						timestamp: Date.now()
+					});
+
+					console.log(`Successfully created pool with fee ${feeAmount/10000}%:`, {
+						address: poolAddress,
+						currentTick: slot0.tick,
+						liquidity: liquidity.toString(),
+						ticksCount: ticks.length
+					});
+
+					return pool;
+
+				} catch (error) {
+					console.error(`Error with fee ${feeAmount/10000}%:`, error);
+					continue;
+				}
+			}
+
+			messageApi.error("未找到可用的流动性池");
+			return null;
+
 		} catch (error) {
-			messageApi.error("流动性池不存在或查询失败");
-			console.error("🚀 ~ createPair ~ error:", error);
+			console.error("createPool error:", error);
+			messageApi.error("创建流动性池失败");
+			return null;
 		}
 	}
 
-	// 【2.价格计算阶段】计算价格
+	// 【价格计算阶段】计算价格
 	async function fetchPrices(tokenOne, tokenTwo) {
-		const tokenOneInstance = new Token(
-			chainId,
-			tokenOne.address,
-			tokenOne.decimals
-		);
-		const tokenTwoInstance = new Token(
-			chainId,
-			tokenTwo.address,
-			tokenTwo.decimals
-		);
+		try {
+			console.log('tokenOne:', tokenOne);
+			console.log('tokenTwo:', tokenTwo);
+			console.log('chainId:', chainId);
 
-		// 1. 创建交易对实例
-		// 通过createPair获取包含两个代币储备量信息的Pair对象
-		const pair = await createPair(tokenOneInstance, tokenTwoInstance);
+			const tokenOneInstance = new Token(
+				chainId,
+				tokenOne.address,
+				tokenOne.decimals
+			);
+			const tokenTwoInstance = new Token(
+				chainId,
+				tokenTwo.address,
+				tokenTwo.decimals
+			);
 
-		// 2. 创建路由实例
-		// Route在Uniswap中扮演着重要角色:
-		// - 它定义了代币兑换的具体路径,可以是直接兑换(A->B)或多跳兑换(A->C->B)
-		// - 通过路由可以找到最优的兑换路径,获得最好的兑换价格
-		// - 路由对象封装了计算价格、处理滑点等复杂逻辑
-		// Route的设计原因:
-		// - 分离关注点:路由负责路径和价格计算,Pair负责管理流动性
-		// - 灵活性:支持未来扩展到更复杂的多跳路由
-		// - 可重用:路由逻辑可以被其他功能复用,如价格预言机
-		const route = new Route([pair], tokenOneInstance, tokenTwoInstance);
+			// 创建池子实例
+			const pool = await createPool(tokenOneInstance, tokenTwoInstance);
+			if (!pool) {
+				console.log("无法创建流动性池");
+				setPrices(null);
+				return;
+			}
 
-		// 保存实例以供后续使用
-		setCurrentTokenOneInstance(tokenOneInstance);
-		setCurrentTokenTwoInstance(tokenTwoInstance);
-		setCurrentRoute(route);
+			// 尝试创建路由
+			try {
+				const route = new Route([pool], tokenOneInstance, tokenTwoInstance);
 
-		// 3. 计算价格
-		const tokenOnePrice = route.midPrice.toSignificant(6);  // 使用route计算正向价格
-		const tokenTwoPrice = route.midPrice.invert().toSignificant(6); // 使用route计算反向价格
+				// 保存实例以供后续使用
+				setCurrentTokenOneInstance(tokenOneInstance);
+				setCurrentTokenTwoInstance(tokenTwoInstance);
+				setCurrentRoute(route);
 
-		const ratio = tokenOnePrice;
-		console.log(`计算价格 ${tokenOne.ticker}: %s, ${tokenTwo.ticker}: %s, Ratio: %s`, tokenOnePrice, tokenTwoPrice, ratio);
+				// 计算价格
+				const tokenOnePrice = route.midPrice.toSignificant(6);
+				const tokenTwoPrice = route.midPrice.invert().toSignificant(6);
+				const ratio = tokenOnePrice;
 
-		setPrices({
-			tokenOne: tokenOnePrice,
-			tokenTwo: tokenTwoPrice,
-			ratio: ratio,
-		});
+				console.log(`计算价格 ${tokenOne.ticker}: ${tokenOnePrice}, ${tokenTwo.ticker}: ${tokenTwoPrice}, Ratio: ${ratio}`);
+
+				setPrices({
+					tokenOne: tokenOnePrice,
+					tokenTwo: tokenTwoPrice,
+					ratio: ratio,
+				});
+			} catch (error) {
+				console.error("Route creation error:", error);
+				messageApi.error("无法计算交易路径");
+				setPrices(null);
+			}
+		} catch (error) {
+			console.error("fetchPrices error:", error);
+			messageApi.error("获取价格失败");
+			setPrices(null);
+		}
 	}
 
 	// 计算价格影响
@@ -341,7 +498,8 @@ const validateRouterAddress = (address) => {
 		try {
 			const amountIn = formatTokenAmount(tokenOneAmount, tokenOne.decimals);
 
-			const trade = new Trade(
+			// 创建 V3 交易
+			const trade = await Trade.fromRoute(
 				currentRoute,
 				CurrencyAmount.fromRawAmount(currentTokenOneInstance, amountIn),
 				TradeType.EXACT_INPUT
@@ -351,41 +509,36 @@ const validateRouterAddress = (address) => {
 			const priceImpact = calculatePriceImpact(trade);
 			console.log("最终价格影响: " + priceImpact);
 
-			// 检查余额是否足够
-			console.log("compare balance: " + balance);
-			console.log("compare amountIn: " + amountIn);
-			// eslint-disable-next-line no-undef
-			// if (balance < (BigInt(amountIn) || 0n)) {
-			// 	messageApi.error("余额不足");
-			// 	return;
-			// }
-
 			// 计算最小获得量(考虑滑点)
-			const tokenTwoOut = (
-				(Number(tokenTwoAmount) * (100 - slippage)) /
-				100
-			).toString();
-			// 将最小获得量转换为带精度的货币数量
-			const amountOutMin = formatTokenAmount(tokenTwoOut, tokenTwo.decimals);
+			const tokenTwoOut = (Number(tokenTwoAmount) * (100 - slippage)) / 100;
+			const amountOutMin = formatTokenAmount(tokenTwoOut.toString(), tokenTwo.decimals);
 
 			// 准备交易参数
-			const path = [currentTokenOneInstance.address, currentTokenTwoInstance.address]; // 交易路径
-			const to = account.address; // 接收地址
-			const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20分钟过期时间
+			const routerAddress = getRouterAddress();
+			if (!routerAddress || !validateRouterAddress(routerAddress)) return;
 
-			console.log(amountIn, amountOutMin, path, to, deadline);
-
-			// 授权代币，确保有足够的代币用于交易
+			// 授权代币
 			await approveToken(tokenOne.address, amountIn);
 
-			const routerAddress = getRouterAddress();
-			// 【交易执行阶段】发送交易
+			// 准备 V3 交易参数
+			const params = {
+				tokenIn: currentTokenOneInstance.address,
+				tokenOut: currentTokenTwoInstance.address,
+				fee: FeeAmount.MEDIUM,
+				recipient: account.address,
+				deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+				amountIn,
+				amountOutMinimum: amountOutMin,
+				sqrtPriceLimitX96: 0, // 不设置价格限制
+			};
+
+			// 执行交易
 			writeContract(
 				{
-					address: routerAddress(),
+					address: routerAddress,
 					abi: router_abi,
-					functionName: "swapExactTokensForTokens",
-					args: [amountIn, amountOutMin, path, to, deadline],
+					functionName: 'exactInputSingle',
+					args: [params],
 				},
 				{
 					onSuccess: (tx) => {
@@ -397,23 +550,23 @@ const validateRouterAddress = (address) => {
 						});
 					},
 					onError: (error) => {
-						console.log("🚀 ~ fetchDexSwap ~ error:", error.message);
+						console.error("fetchDexSwap error:", error.message);
 						messageApi.error(error.shortMessage);
 					},
 				}
 			);
 		} catch (error) {
-			messageApi.error("检查余额失败");
+			messageApi.error("交易执行失败");
 			console.error(error);
 		}
 	}
 
 	useEffect(() => {
 		// 如果没有链接钱包，则不进行价格计算
-		if (!account.isConnected) {
-			console.log("没有链接钱包");
-			return;
-		};
+		// if (!account.isConnected) {
+		// 	console.log("没有链接钱包");
+		// 	return;
+		// };
 		fetchPrices(tokenList[0], tokenList[1]);
 	}, []);
 
@@ -464,6 +617,22 @@ const validateRouterAddress = (address) => {
 			</div>
 		</>
 	);
+
+	// 清理缓存的函数
+	function clearTicksCache(maxAge = 5 * 60 * 1000) { // 默认 5 分钟
+		const now = Date.now();
+		for (const [address, data] of ticksCache.entries()) {
+			if (now - data.timestamp > maxAge) {
+				ticksCache.delete(address);
+			}
+		}
+	}
+
+	// 定期清理缓存
+	useEffect(() => {
+		const interval = setInterval(() => clearTicksCache(), 5 * 60 * 1000);
+		return () => clearInterval(interval);
+	}, []);
 
 	return (
 		<>
@@ -538,4 +707,4 @@ const validateRouterAddress = (address) => {
 	);
 }
 
-export default Swap;
+export default SwapV3;
