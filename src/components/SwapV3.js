@@ -17,9 +17,9 @@ import {
 	TickMath,
 	TICK_SPACINGS,
 	TickListDataProvider,
-	nearestUsableTick
-} from '@uniswap/v3-sdk'
-import { Token, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
+	nearestUsableTick,
+} from "@uniswap/v3-sdk";
+import { Token, CurrencyAmount, TradeType } from "@uniswap/sdk-core";
 // import {
 // 	ChainId,
 // 	Token,
@@ -27,8 +27,19 @@ import { Token, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
 // 	TradeType
 // } from "@uniswap/sdk-core";
 import { ethers } from "ethers";
-import { erc20, infura_connection_base, infura_connection_testnet, pool_abi, router_v3_api } from "../resource";
-import { useAccount, useWriteContract, useReadContract, useChainId } from "wagmi";
+import {
+	erc20,
+	infura_connection_base,
+	infura_connection_testnet,
+	pool_abi,
+	router_v3_api,
+} from "../resource";
+import {
+	useAccount,
+	useWriteContract,
+	useReadContract,
+	useChainId,
+} from "wagmi";
 import { ROUTER_ADDRESSES } from "../contracts";
 
 // 缓存 tick 数据
@@ -36,35 +47,74 @@ const ticksCache = new Map();
 
 // 添加所有可能的费率常量
 const FEE_AMOUNTS = [
-  // FeeAmount.LOWEST,  // 0.01%
-  FeeAmount.LOW,     // 0.05%
-//   FeeAmount.MEDIUM,  // 0.3%
-  // FeeAmount.HIGH     // 1%
+	// FeeAmount.LOWEST,  // 0.01%
+	FeeAmount.LOW, // 0.05%
+	//   FeeAmount.MEDIUM,  // 0.3%
+	// FeeAmount.HIGH     // 1%
 ];
 
 // 1. 首先定义 ERC20 代币的标准 ABI
 const ERC20_ABI = [
 	// 查询授权额度
 	{
-	  constant: true,
-	  inputs: [
-		{ name: "owner", type: "address" },
-		{ name: "spender", type: "address" }
-	  ],
-	  name: "allowance",
-	  outputs: [{ name: "", type: "uint256" }],
-	  type: "function"
+		constant: true,
+		inputs: [
+			{ name: "owner", type: "address" },
+			{ name: "spender", type: "address" },
+		],
+		name: "allowance",
+		outputs: [{ name: "", type: "uint256" }],
+		type: "function",
 	},
 	// 授权函数
 	{
-	  constant: false,
-	  inputs: [
-		{ name: "spender", type: "address" },
-		{ name: "amount", type: "uint256" }
-	  ],
-	  name: "approve",
-	  outputs: [{ name: "", type: "bool" }],
-	  type: "function"
+		constant: false,
+		inputs: [
+			{ name: "spender", type: "address" },
+			{ name: "amount", type: "uint256" },
+		],
+		name: "approve",
+		outputs: [{ name: "", type: "bool" }],
+		type: "function",
+	},
+];
+
+const ROUTER_ABI = [
+	{
+	  "inputs": [{
+		"components": [{
+		  "internalType": "bytes",
+		  "name": "path",
+		  "type": "bytes"
+		}, {
+		  "internalType": "address",
+		  "name": "recipient",
+		  "type": "address"
+		}, {
+		  "internalType": "uint256",
+		  "name": "deadline",
+		  "type": "uint256"
+		}, {
+		  "internalType": "uint256",
+		  "name": "amountIn",
+		  "type": "uint256"
+		}, {
+		  "internalType": "uint256",
+		  "name": "amountOutMinimum",
+		  "type": "uint256"
+		}],
+		"internalType": "struct ISwapRouter.ExactInputParams",
+		"name": "params",
+		"type": "tuple"
+	  }],
+	  "name": "exactInput",
+	  "outputs": [{
+		"internalType": "uint256",
+		"name": "amountOut",
+		"type": "uint256"
+	  }],
+	  "stateMutability": "payable",
+	  "type": "function"
 	}
   ];
 
@@ -76,15 +126,17 @@ function encodePath(path, fees) {
   
 	let encoded = '0x';
 	for (let i = 0; i < fees.length; i++) {
-	  // 20 字节: 代币地址
-	  encoded += path[i].slice(2);
-	  // 3 字节: 费率
+	  // 确保地址没有 '0x' 前缀
+	  const cleanAddress = path[i].toLowerCase().replace('0x', '');
+	  encoded += cleanAddress;
+	  // 将费率转换为十六进制并填充到 6 位
 	  encoded += fees[i].toString(16).padStart(6, '0');
 	}
-	// 最后一个代币地址
-	encoded += path[path.length - 1].slice(2);
+	// 添加最后一个地址
+	encoded += path[path.length - 1].toLowerCase().replace('0x', '');
 	
-	return encoded.toLowerCase();
+	console.log("Encoded path:", encoded);
+	return encoded;
   }
 
 // 获取 tick 范围的函数
@@ -94,8 +146,8 @@ function getTickRange(currentTick, tickSpacing) {
 
 	// 计算范围 (当前 tick 上下各 10 个 tick spacing)
 	const numTicksAround = 10;
-	const minTick = nearestTick - (tickSpacing * numTicksAround);
-	const maxTick = nearestTick + (tickSpacing * numTicksAround);
+	const minTick = nearestTick - tickSpacing * numTicksAround;
+	const maxTick = nearestTick + tickSpacing * numTicksAround;
 
 	return { minTick, maxTick, tickSpacing };
 }
@@ -117,7 +169,7 @@ async function getPoolTicks(poolContract, feeAmount) {
 			currentTick,
 			minTick,
 			maxTick,
-			tickSpacing
+			tickSpacing,
 		});
 
 		// 3. 构建 tick 数组
@@ -132,18 +184,17 @@ async function getPoolTicks(poolContract, feeAmount) {
 		// 5. 处理结果
 		const ticks = tickResults
 			.map((tickData, i) => {
-				const tick = minTick + (i * tickSpacing);
+				const tick = minTick + i * tickSpacing;
 				return {
 					index: tick,
 					liquidityNet: tickData.liquidityNet,
-					liquidityGross: tickData.liquidityGross
+					liquidityGross: tickData.liquidityGross,
 				};
 			})
-			.filter(tick => tick.liquidityGross.gt(0)); // 只保留有流动性的 tick
+			.filter((tick) => tick.liquidityGross.gt(0)); // 只保留有流动性的 tick
 
 		console.log(`Found ${ticks.length} initialized ticks`);
 		return ticks;
-
 	} catch (error) {
 		console.error("Error fetching ticks:", error);
 		throw error;
@@ -187,18 +238,18 @@ function SwapV3() {
 	const { data: balance } = useReadContract({
 		address: tokenOne?.address,
 		abi: [
-				{
-						constant: true,
-						inputs: [{ name: "_owner", type: "address" }],
-						name: "balanceOf",
-						outputs: [{ name: "balance", type: "uint256" }],
-						type: "function",
-				},
+			{
+				constant: true,
+				inputs: [{ name: "_owner", type: "address" }],
+				name: "balanceOf",
+				outputs: [{ name: "balance", type: "uint256" }],
+				type: "function",
+			},
 		],
 		functionName: "balanceOf",
 		args: [account?.address],
 		enabled: !!account?.address && !!tokenOne?.address,
-});
+	});
 
 	function handleSlippageChange(e) {
 		setSlippage(e.target.value);
@@ -244,13 +295,13 @@ function SwapV3() {
 	}
 
 	// 添加合约地址验证
-const validateRouterAddress = (address) => {
-  if (!ethers.utils.isAddress(address)) {
-    messageApi.error('无效的路由合约地址');
-    return false;
-  }
-  return true;
-};
+	const validateRouterAddress = (address) => {
+		if (!ethers.utils.isAddress(address)) {
+			messageApi.error("无效的路由合约地址");
+			return false;
+		}
+		return true;
+	};
 
 	// 根据网络动态获取路由地址
 	const getRouterAddress = () => {
@@ -258,14 +309,14 @@ const validateRouterAddress = (address) => {
 		if (!chainId) return null;
 
 		switch (chainId) {
-			case 8453:  // Base
+			case 8453: // Base
 				return ROUTER_ADDRESSES.BASE;
 			case 84531: // Base Testnet
 				return ROUTER_ADDRESSES.BASE_TESTNET;
 			case 11155111: // Sepolia
 				return ROUTER_ADDRESSES.SEPOLIA;
 			default:
-				messageApi.error('不支持的网络');
+				messageApi.error("不支持的网络");
 				return null;
 		}
 	};
@@ -295,21 +346,23 @@ const validateRouterAddress = (address) => {
 		return combined;
 	};
 
-		// 2. 获取 provider 的辅助函数
-		const getProvider = (needSigner = false) => {
-			if (needSigner) {
-			  // 需要签名时使用钱包 provider
-			  if (!window.ethereum) {
+	// 2. 获取 provider 的辅助函数
+	const getProvider = (needSigner = false) => {
+		if (needSigner) {
+			// 需要签名时使用钱包 provider
+			if (!window.ethereum) {
 				throw new Error("请安装 MetaMask 或其他钱包");
-			  }
-			  return new ethers.providers.Web3Provider(window.ethereum);
-			} else {
-			  // 只读操作使用 RPC provider
-			  return new ethers.providers.JsonRpcProvider(
-				chainId === 11155111 ? infura_connection_testnet : infura_connection_base
-			  );
 			}
-		  };
+			return new ethers.providers.Web3Provider(window.ethereum);
+		} else {
+			// 只读操作使用 RPC provider
+			return new ethers.providers.JsonRpcProvider(
+				chainId === 11155111
+					? infura_connection_testnet
+					: infura_connection_base
+			);
+		}
+	};
 
 	// 创建池子的函数
 	async function createPool(tokenOneInstance, tokenTwoInstance) {
@@ -322,12 +375,14 @@ const validateRouterAddress = (address) => {
 						tokenTwoInstance,
 						feeAmount
 					);
-					console.log('getPoolAddress: ' + poolAddress);
+					console.log("getPoolAddress: " + poolAddress);
 					// let poolAddress = getPool(tokenOne.address, tokenTwo.address, feeAmount);
 
-					
 					poolAddress = "0x224Cc4e5b50036108C1d862442365054600c260C";
-					console.log(`Checking pool with fee ${feeAmount/10000}%:`, poolAddress);
+					console.log(
+						`Checking pool with fee ${feeAmount / 10000}%:`,
+						poolAddress
+					);
 
 					// 2. 检查缓存
 					if (ticksCache.has(poolAddress)) {
@@ -341,35 +396,42 @@ const validateRouterAddress = (address) => {
 
 					// 4. 验证合约存在
 					const code = await provider.getCode(poolAddress);
-					if (code === '0x') {
-						console.log(`Pool does not exist for fee ${feeAmount/10000}%`);
+					if (code === "0x") {
+						console.log(`Pool does not exist for fee ${feeAmount / 10000}%`);
 						continue;
 					}
 
 					// 5. 创建合约实例
-					const poolContract = new ethers.Contract(poolAddress, pool_abi, provider);
+					const poolContract = new ethers.Contract(
+						poolAddress,
+						pool_abi,
+						provider
+					);
 
 					// 6. 获取池子状态
 					const [slot0, liquidity] = await Promise.all([
 						poolContract.slot0(),
-						poolContract.liquidity()
+						poolContract.liquidity(),
 					]);
 
 					// 7. 验证流动性
 					if (liquidity.eq(0)) {
-						console.log(`No liquidity in pool with fee ${feeAmount/10000}%`);
+						console.log(`No liquidity in pool with fee ${feeAmount / 10000}%`);
 						continue;
 					}
 
 					// 8. 获取 ticks 数据
 					const ticks = await getPoolTicks(poolContract, feeAmount);
 					if (!ticks || ticks.length === 0) {
-						console.log(`No valid ticks found for fee ${feeAmount/10000}%`);
+						console.log(`No valid ticks found for fee ${feeAmount / 10000}%`);
 						continue;
 					}
 
 					// 9. 创建 TickListDataProvider
-					const tickDataProvider = new TickListDataProvider(ticks, TICK_SPACINGS[feeAmount]);
+					const tickDataProvider = new TickListDataProvider(
+						ticks,
+						TICK_SPACINGS[feeAmount]
+					);
 
 					// 10. 创建池子实例
 					const pool = new Pool(
@@ -386,27 +448,28 @@ const validateRouterAddress = (address) => {
 					ticksCache.set(poolAddress, {
 						pool,
 						ticks,
-						timestamp: Date.now()
+						timestamp: Date.now(),
 					});
 
-					console.log(`Successfully created pool with fee ${feeAmount/10000}%:`, {
-						address: poolAddress,
-						currentTick: slot0.tick,
-						liquidity: liquidity.toString(),
-						ticksCount: ticks.length
-					});
+					console.log(
+						`Successfully created pool with fee ${feeAmount / 10000}%:`,
+						{
+							address: poolAddress,
+							currentTick: slot0.tick,
+							liquidity: liquidity.toString(),
+							ticksCount: ticks.length,
+						}
+					);
 
 					return pool;
-
 				} catch (error) {
-					console.error(`Error with fee ${feeAmount/10000}%:`, error);
+					console.error(`Error with fee ${feeAmount / 10000}%:`, error);
 					continue;
 				}
 			}
 
 			messageApi.error("未找到可用的流动性池");
 			return null;
-
 		} catch (error) {
 			console.error("createPool error:", error);
 			messageApi.error("创建流动性池失败");
@@ -417,9 +480,9 @@ const validateRouterAddress = (address) => {
 	// 【价格计算阶段】计算价格
 	async function fetchPrices(tokenOne, tokenTwo) {
 		try {
-			console.log('tokenOne:', tokenOne);
-			console.log('tokenTwo:', tokenTwo);
-			console.log('chainId:', chainId);
+			console.log("tokenOne:", tokenOne);
+			console.log("tokenTwo:", tokenTwo);
+			console.log("chainId:", chainId);
 
 			const tokenOneInstance = new Token(
 				chainId,
@@ -454,7 +517,9 @@ const validateRouterAddress = (address) => {
 				const tokenTwoPrice = route.midPrice.invert().toSignificant(6);
 				const ratio = tokenOnePrice;
 
-				console.log(`计算价格 ${tokenOne.ticker}: ${tokenOnePrice}, ${tokenTwo.ticker}: ${tokenTwoPrice}, Ratio: ${ratio}`);
+				console.log(
+					`计算价格 ${tokenOne.ticker}: ${tokenOnePrice}, ${tokenTwo.ticker}: ${tokenTwoPrice}, Ratio: ${ratio}`
+				);
 
 				setPrices({
 					tokenOne: tokenOnePrice,
@@ -480,13 +545,15 @@ const validateRouterAddress = (address) => {
 	// 3. 确保交易对的价格变动在可接受范围内
 	function calculatePriceImpact(trade) {
 		// 获取交易前后的价格变化
-    const priceImpact = trade.priceImpact.toSignificant(2);
+		const priceImpact = trade.priceImpact.toSignificant(2);
 		console.log("价格影响: " + priceImpact);
 
-    // 根据价格影响程度给出警告
-    if (priceImpact > 5) {
-        messageApi.warning(`大���交易警告：此笔交易将导致 ${priceImpact}% 的价格影响`);
-    }
+		// 根据价格影响程度给出警告
+		if (priceImpact > 5) {
+			messageApi.warning(
+				`大���交易警告：此笔交易将导致 ${priceImpact}% 的价格影响`
+			);
+		}
 
 		return priceImpact;
 	}
@@ -494,19 +561,26 @@ const validateRouterAddress = (address) => {
 	// 2. 检查授权状态的函数
 	async function checkAllowance(tokenAddress, ownerAddress, spenderAddress) {
 		try {
-		// const provider = new ethers.providers.JsonRpcProvider(
-		// 	chainId === 11155111 ? infura_connection_testnet : infura_connection_base
-		// );
-		const provider = getProvider(true);
-		
-		const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-		const allowance = await tokenContract.allowance(ownerAddress, spenderAddress);
-		
-		console.log("Current allowance:", allowance.toString());
-		return allowance;
+			// const provider = new ethers.providers.JsonRpcProvider(
+			// 	chainId === 11155111 ? infura_connection_testnet : infura_connection_base
+			// );
+			const provider = getProvider(true);
+
+			const tokenContract = new ethers.Contract(
+				tokenAddress,
+				ERC20_ABI,
+				provider
+			);
+			const allowance = await tokenContract.allowance(
+				ownerAddress,
+				spenderAddress
+			);
+
+			console.log("Current allowance:", allowance.toString());
+			return allowance;
 		} catch (error) {
-		console.error("检查授权失败:", error);
-		throw error;
+			console.error("检查授权失败:", error);
+			throw error;
 		}
 	}
 
@@ -526,124 +600,146 @@ const validateRouterAddress = (address) => {
 
 	async function approveToken(tokenAddress, spenderAddress, amount) {
 		try {
-		  console.log("开始授权流程");
-		  console.log("Token address:", tokenAddress);
-		  console.log("Spender address:", spenderAddress);
-		  console.log("Amount:", amount);
-	  
-		  // 验证地址
-		  if (!ethers.utils.isAddress(tokenAddress)) {
-			throw new Error("无效的代币地址");
-		  }
-		  if (!ethers.utils.isAddress(spenderAddress)) {
-			throw new Error("无效的 spender 地址");
-		  }
-	  
-		  // 获取 provider 和 signer
-		  const provider = getProvider(true);
-		  // 注意：这里需要用户连接钱包
-		  const signer = await provider.getSigner(account.address);
-		  
-		  // 创建代币合约实例
-		  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-	  
-		  // 检查当前授权额度
-			console.log("授权状态检查：");
-		  const currentAllowance = await checkAllowance(
-			tokenAddress,
-			account.address,
-			spenderAddress
-		  );
-			// 添加更友好的日志输出
-			console.log("- 当前授权额度：", ethers.utils.formatUnits(currentAllowance, 18));
-			console.log("- 需要授权额度：", ethers.utils.formatUnits(amount, 18));
-		  
-	  
-		  // 如果已经有足够的授权额度，直接返回
-		  if (currentAllowance.gte(amount)) {
-			console.log("已有足够的授权额度");
-			return true;
-		  }
+			console.log("开始授权流程");
+			console.log("Token address:", tokenAddress);
+			console.log("Spender address:", spenderAddress);
+			console.log("Amount:", amount);
 
-		  console.log("⚠️ 需要进行新的授权");
-		  messageApi.info("正在请求授权...");	  
-	  
-		  // 发送授权交易
-		  return new Promise(async (resolve, reject) => {
-			try {
-			  // 发送交易
-			  const tx = await tokenContract.approve(spenderAddress, amount);
-			  console.log("授权交易已发送:", tx.hash);
-			  
-			  messageApi.info({
-				content: "授权交易已发送，等待确认...",
-				duration: 5
-			  });
-	  
-			  // 等待交易确认
-			  const receipt = await tx.wait(1); // 等待 1 个确认
-			  console.log("交易已确认:", receipt);
-	  
-			  // 验证新的授权额度
-			  const newAllowance = await checkAllowance(
+			// 验证地址
+			if (!ethers.utils.isAddress(tokenAddress)) {
+				throw new Error("无效的代币地址");
+			}
+			if (!ethers.utils.isAddress(spenderAddress)) {
+				throw new Error("无效的 spender 地址");
+			}
+
+			// 获取 provider 和 signer
+			const provider = getProvider(true);
+			// 注意：这里需要用户连接钱包
+			const signer = await provider.getSigner(account.address);
+
+			// 创建代币合约实例
+			const tokenContract = new ethers.Contract(
+				tokenAddress,
+				ERC20_ABI,
+				signer
+			);
+
+			// 检查当前授权额度
+			console.log("授权状态检查：");
+			const currentAllowance = await checkAllowance(
 				tokenAddress,
 				account.address,
 				spenderAddress
-			  );
-	  
-			  if (newAllowance.gte(amount)) {
-				messageApi.success("授权成功");
-				resolve(true);
-			  } else {
-				throw new Error("授权额度验证失败");
-			  }
-			} catch (error) {
-			  console.error("授权失败:", error);
-			  messageApi.error(error.message || "授权失败");
-			  reject(error);
+			);
+			// 添加更友好的日志输出
+			console.log(
+				"- 当前授权额度：",
+				ethers.utils.formatUnits(currentAllowance, 18)
+			);
+			console.log("- 需要授权额度：", ethers.utils.formatUnits(amount, 18));
+
+			// 如果已经有足够的授权额度，直接返回
+			if (currentAllowance.gte(amount)) {
+				console.log("已有足够的授权额度");
+				return true;
 			}
-		  });
+
+			console.log("⚠️ 需要进行新的授权");
+			messageApi.info("正在请求授权...");
+
+			// 发送授权交易
+			return new Promise(async (resolve, reject) => {
+				try {
+					// 发送交易
+					const tx = await tokenContract.approve(spenderAddress, amount);
+					console.log("授权交易已发送:", tx.hash);
+
+					messageApi.info({
+						content: "授权交易已发送，等待确认...",
+						duration: 5,
+					});
+
+					// 等待交易确认
+					const receipt = await tx.wait(1); // 等待 1 个确认
+					console.log("交易已确认:", receipt);
+
+					// 验证新的授权额度
+					const newAllowance = await checkAllowance(
+						tokenAddress,
+						account.address,
+						spenderAddress
+					);
+
+					if (newAllowance.gte(amount)) {
+						messageApi.success("授权成功");
+						resolve(true);
+					} else {
+						throw new Error("授权额度验证失败");
+					}
+				} catch (error) {
+					console.error("授权失败:", error);
+					messageApi.error(error.message || "授权失败");
+					reject(error);
+				}
+			});
 		} catch (error) {
-		  console.error("授权过程出错:", error);
-		  messageApi.error(error.message || "授权过程出错");
-		  throw error;
+			console.error("授权过程出错:", error);
+			messageApi.error(error.message || "授权过程出错");
+			throw error;
 		}
-	  }
+	}
+
+	// 2. 使用 ethers 执行交易的函数
+async function executeSwap(routerAddress, swapParams) {
+	try {
+	  // 获取 provider 和 signer
+	  const provider = new ethers.providers.Web3Provider(window.ethereum);
+	  await provider.send("eth_requestAccounts", []); // 请求用户连接钱包
+	  const signer = provider.getSigner();
+  
+	  // 创建 router 合约实例
+	  const routerContract = new ethers.Contract(
+		routerAddress,
+		ROUTER_ABI,
+		signer
+	  );
+  
+	  console.log("Swap Parameters:", swapParams);
+  
+	  // 发送交易
+	  const tx = await routerContract.exactInput(
+		swapParams,
+		{
+		  gasLimit: 500000, // 设置 gas 限制
+		  value: 0 // 如果不是 ETH 交易，设为 0
+		}
+	  );
+  
+	  console.log("Transaction sent:", tx.hash);
+	  messageApi.info("交易已发送，等待确认...");
+  
+	  // 等待交易确认
+	  const receipt = await tx.wait(1);
+	  console.log("Transaction confirmed:", receipt);
+  
+	  return receipt;
+	} catch (error) {
+	  console.error("Swap execution failed:", error);
+	  throw error;
+	}
+  }
 
 	// 【3.交易准备阶段】准备交易
 	async function fetchDexSwap() {
 		try {
-			// 检查授权额度
-			// const tokenContract = new ethers.Contract(
-			// 	tokenOne.address, // 使用代币地址
-			// 	[
-			// 		"function allowance(address owner, address spender) view returns (uint256)",
-			// 		"function approve(address spender, uint256 value) returns (bool)"
-			// 	],
-			// 	new ethers.providers.JsonRpcProvider(
-			// 		chainId === 11155111 ? infura_connection_testnet : infura_connection_base
-			// 	)
-			// );
-
 			const routerAddress = getRouterAddress();
 			if (!routerAddress || !validateRouterAddress(routerAddress)) {
 				throw new Error("无效的路由合约地址");
-			};
+			}
 
 			const amountIn = formatTokenAmount(tokenOneAmount, tokenOne.decimals);
 			console.log("交易金额:", amountIn);
-
-			// const allowance = await tokenContract.allowance(account.address, routerAddress);
-			// console.log("Current allowance:", allowance.toString());
-			// console.log("Required amount:", amountIn);
-
-			// 如果授权额度不足，先进行授权
-			// if (allowance.lt(amountIn)) {
-			// 	console.log("需要授权");
-			// 	await approveToken(tokenOne.address, routerAddress, amountIn); // 修改这里，传入 routerAddress
-			// 	// 等待授权交易完成
-			// 	return;
-			// }
 
 			try {
 				await approveToken(tokenOne.address, routerAddress, amountIn); // 修改这里，传入 routerAddress
@@ -651,52 +747,57 @@ const validateRouterAddress = (address) => {
 				console.error("授权失败，终止交易");
 			}
 
-			// 计算最小获得量(考虑滑点)
+    // 计算最小获得量(考虑滑点)
 			const tokenTwoOut = (Number(tokenTwoAmount) * (100 - slippage)) / 100;
 			const amountOutMin = formatTokenAmount(tokenTwoOut.toString(), tokenTwo.decimals);
 
 			// 构建交易路径
 			const path = encodePath(
-				[currentTokenOneInstance.address, currentTokenTwoInstance.address],
+				[tokenOne.address, tokenTwo.address],
 				[FeeAmount.LOW]
 			);
+
+			// 构建交易路径
 			console.log("Encoded path:", path);
 
-			const params = {
-				// tokenIn: currentTokenOneInstance.address,
-				// tokenOut: currentTokenTwoInstance.address,
-				// fee: FeeAmount.LOW,
+			const swapParams = {
 				path,
 				recipient: account.address,
 				deadline: Math.floor(Date.now() / 1000) + 60 * 20,
 				amountIn,
-				amountOutMinimum: amountOutMin
+				amountOutMinimum: amountOutMin,
 			};
-			console.log("params >>>> ", params);
+			console.log("swapParams >>>> ", swapParams);
 
-			// 执行交易
-			writeContract(
-				{
-					address: routerAddress,
-					abi: router_v3_api,
-					functionName: 'exactInput',
-					args: [params]
-				},
-				{
-					onSuccess: (tx) => {
-						messageApi.info("交易发送成功！交易哈希: " + tx.hash);
-						setTxDetails({
-							to: tx.to,
-							data: tx.data,
-							value: tx.value,
-						});
-					},
-					onError: (error) => {
-						console.error("交易失败:", error);
-						messageApi.error(error.shortMessage || "交易失败");
-					},
-				}
-			);
+			try {
+				// 执行交易
+				const receipt = await executeSwap(routerAddress, swapParams);
+				
+				// 交易成功
+				messageApi.success({
+				  content: "交易成功！",
+				  duration: 5
+				});
+		  
+				// 更新交易详情
+				setTxDetails({
+				  to: receipt.to,
+				  from: receipt.from,
+				  hash: receipt.transactionHash,
+				  confirmation: receipt.confirmations,
+				  success: true
+				});
+		  
+				// 可以在这里添加其他成功后的操作，比如刷新余额等
+		  
+			  } catch (error) {
+				console.error("交易执行失败:", error);
+				messageApi.error({
+				  content: `交易失败: ${error.message}`,
+				  duration: 5
+				});
+			  }
+      
 		} catch (error) {
 			messageApi.error("交易执行失败");
 			console.error(error);
@@ -761,7 +862,8 @@ const validateRouterAddress = (address) => {
 	);
 
 	// 清理缓存的函数
-	function clearTicksCache(maxAge = 5 * 60 * 1000) { // 默认 5 分钟
+	function clearTicksCache(maxAge = 5 * 60 * 1000) {
+		// 默认 5 分钟
 		const now = Date.now();
 		for (const [address, data] of ticksCache.entries()) {
 			if (now - data.timestamp > maxAge) {
