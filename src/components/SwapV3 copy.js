@@ -295,22 +295,6 @@ const validateRouterAddress = (address) => {
 		return combined;
 	};
 
-		// 2. 获取 provider 的辅助函数
-		const getProvider = (needSigner = false) => {
-			if (needSigner) {
-			  // 需要签名时使用钱包 provider
-			  if (!window.ethereum) {
-				throw new Error("请安装 MetaMask 或其他钱包");
-			  }
-			  return new ethers.providers.Web3Provider(window.ethereum);
-			} else {
-			  // 只读操作使用 RPC provider
-			  return new ethers.providers.JsonRpcProvider(
-				chainId === 11155111 ? infura_connection_testnet : infura_connection_base
-			  );
-			}
-		  };
-
 	// 创建池子的函数
 	async function createPool(tokenOneInstance, tokenTwoInstance) {
 		try {
@@ -337,7 +321,9 @@ const validateRouterAddress = (address) => {
 					}
 
 					// 3. 获取 provider
-					const provider = getProvider(true);
+					const provider = new ethers.providers.JsonRpcProvider(
+						chainId === 11155111 ? infura_connection_testnet : infura_connection_base
+					);
 
 					// 4. 验证合约存在
 					const code = await provider.getCode(poolAddress);
@@ -494,10 +480,9 @@ const validateRouterAddress = (address) => {
 	// 2. 检查授权状态的函数
 	async function checkAllowance(tokenAddress, ownerAddress, spenderAddress) {
 		try {
-		// const provider = new ethers.providers.JsonRpcProvider(
-		// 	chainId === 11155111 ? infura_connection_testnet : infura_connection_base
-		// );
-		const provider = getProvider(true);
+		const provider = new ethers.providers.JsonRpcProvider(
+			chainId === 11155111 ? infura_connection_testnet : infura_connection_base
+		);
 		
 		const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
 		const allowance = await tokenContract.allowance(ownerAddress, spenderAddress);
@@ -523,7 +508,6 @@ const validateRouterAddress = (address) => {
 	// 	* 在用户进行代币交换前，需要先调用此函数
 	//  * 授权成功后，才能进行实际的代币交换操作
 	//  * 这是一个独立的交易，需要用户支付 gas 费用
-
 	async function approveToken(tokenAddress, spenderAddress, amount) {
 		try {
 		  console.log("开始授权流程");
@@ -539,69 +523,74 @@ const validateRouterAddress = (address) => {
 			throw new Error("无效的 spender 地址");
 		  }
 	  
-		  // 获取 provider 和 signer
-		  const provider = getProvider(true);
-		  // 注意：这里需要用户连接钱包
-		  const signer = await provider.getSigner(account.address);
-		  
-		  // 创建代币合约实例
-		  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-	  
 		  // 检查当前授权额度
-			console.log("授权状态检查：");
 		  const currentAllowance = await checkAllowance(
 			tokenAddress,
 			account.address,
 			spenderAddress
 		  );
-			// 添加更友好的日志输出
-			console.log("- 当前授权额度：", ethers.utils.formatUnits(currentAllowance, 18));
-			console.log("- 需要授权额度：", ethers.utils.formatUnits(amount, 18));
-		  
 	  
 		  // 如果已经有足够的授权额度，直接返回
 		  if (currentAllowance.gte(amount)) {
 			console.log("已有足够的授权额度");
 			return true;
 		  }
-
-		  console.log("⚠️ 需要进行新的授权");
-		  messageApi.info("正在请求授权...");	  
 	  
-		  // 发送授权交易
-		  return new Promise(async (resolve, reject) => {
-			try {
-			  // 发送交易
-			  const tx = await tokenContract.approve(spenderAddress, amount);
-			  console.log("授权交易已发送:", tx.hash);
-			  
-			  messageApi.info({
-				content: "授权交易已发送，等待确认...",
-				duration: 5
-			  });
+		  // 准备授权交易
+		  const txRequest = {
+			address: tokenAddress,
+			abi: ERC20_ABI,
+			functionName: 'approve',
+			args: [spenderAddress, amount],
+			// 对于某些代币，可能需要先将授权额度设置为 0
+			// 如果代币有这个要求，需要先执行一次授权为 0 的交易
+		  };
 	  
-			  // 等待交易确认
-			  const receipt = await tx.wait(1); // 等待 1 个确认
-			  console.log("交易已确认:", receipt);
+		  // 执行授权
+		  return new Promise((resolve, reject) => {
+			writeContract(
+			  txRequest,
+			  {
+				onSuccess: async (tx) => {
+				  console.log("授权交易已发送:", tx.hash);
+				  messageApi.info({
+					content: "授权交易已发送，等待确认...",
+					duration: 5
+				  });
 	  
-			  // 验证新的授权额度
-			  const newAllowance = await checkAllowance(
-				tokenAddress,
-				account.address,
-				spenderAddress
-			  );
-	  
-			  if (newAllowance.gte(amount)) {
-				messageApi.success("授权成功");
-				resolve(true);
-			  } else {
-				throw new Error("授权额度验证失败");
+				  // 等待交易确认
+				  try {
+					const provider = new ethers.providers.JsonRpcProvider(
+					  chainId === 11155111 ? infura_connection_testnet : infura_connection_base
+					);
+					await provider.waitForTransaction(tx.hash, 1); // 等待 1 个确认
+					
+					// 再次检查授权额度
+					const newAllowance = await checkAllowance(
+					  tokenAddress,
+					  account.address,
+					  spenderAddress
+					);
+					
+					if (newAllowance.gte(amount)) {
+					  messageApi.success("授权成功");
+					  resolve(true);
+					} else {
+					  messageApi.error("授权额度验证失败");
+					  reject(new Error("授权额度验证失败"));
+					}
+				  } catch (error) {
+					messageApi.error("等待交易确认时出错");
+					reject(error);
+				  }
+				},
+				onError: (error) => {
+				  console.error("授权失败:", error);
+				  messageApi.error(error.shortMessage || "授权失败");
+				  reject(error);
+				}
 			  }
-			} catch (error) {
-			  console.error("授权失败:", error);
-			  messageApi.error(error.message || "授权失败");
-			  reject(error);
-			}
+			);
 		  });
 		} catch (error) {
 		  console.error("授权过程出错:", error);
