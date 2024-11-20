@@ -54,37 +54,104 @@ const FEE_AMOUNTS = [
 ];
 
 // 1. 首先定义 ERC20 代币的标准 ABI
-const ERC20_ABI = [
-  // 查询余额
-  {
-    constant: true,
-    inputs: [{ name: "_owner", type: "address" }],
-    name: "balanceOf",
-    outputs: [{ name: "balance", type: "uint256" }],
-    type: "function"
-  },
-  // 查询授权额度
-  {
-    constant: true,
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" }
-    ],
-    name: "allowance",
-    outputs: [{ name: "", type: "uint256" }],
-    type: "function"
-  },
-  // 授权函数
-  {
-    constant: false,
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount", type: "uint256" }
-    ],
-    name: "approve",
-    outputs: [{ name: "", type: "bool" }],
-    type: "function"
-  }
+const ERC20_ABI =  [
+    // 基本信息查询函数
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "name",
+        "outputs": [{"name": "", "type": "string"}],
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "string"}],
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "type": "function"
+    },
+    // 余额查询
+    {
+        "constant": true,
+        "inputs": [{"name": "_owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "balance", "type": "uint256"}],
+        "type": "function"
+    },
+    // 授权查询
+    {
+        "constant": true,
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "spender", "type": "address"}
+        ],
+        "name": "allowance",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "type": "function"
+    },
+    // 授权函数
+    {
+        "constant": false,
+        "inputs": [
+            {"name": "spender", "type": "address"},
+            {"name": "amount", "type": "uint256"}
+        ],
+        "name": "approve",
+        "outputs": [{"name": "", "type": "bool"}],
+        "type": "function"
+    },
+    // 转账函数
+    {
+        "constant": false,
+        "inputs": [
+            {"name": "recipient", "type": "address"},
+            {"name": "amount", "type": "uint256"}
+        ],
+        "name": "transfer",
+        "outputs": [{"name": "", "type": "bool"}],
+        "type": "function"
+    },
+    // 代理转账函数
+    {
+        "constant": false,
+        "inputs": [
+            {"name": "sender", "type": "address"},
+            {"name": "recipient", "type": "address"},
+            {"name": "amount", "type": "uint256"}
+        ],
+        "name": "transferFrom",
+        "outputs": [{"name": "", "type": "bool"}],
+        "type": "function"
+    },
+    // 转账事件
+    {
+        "anonymous": false,
+        "inputs": [
+            {"indexed": true, "name": "from", "type": "address"},
+            {"indexed": true, "name": "to", "type": "address"},
+            {"indexed": false, "name": "value", "type": "uint256"}
+        ],
+        "name": "Transfer",
+        "type": "event"
+    },
+    // 授权事件
+    {
+        "anonymous": false,
+        "inputs": [
+            {"indexed": true, "name": "owner", "type": "address"},
+            {"indexed": true, "name": "spender", "type": "address"},
+            {"indexed": false, "name": "value", "type": "uint256"}
+        ],
+        "name": "Approval",
+        "type": "event"
+    }
 ];
 
 const ROUTER_ABI = [
@@ -137,25 +204,45 @@ const ROUTER_ABI = [
 ];
 
 // WETH ABI
+// 添加 WETH ABI
 const WETH_ABI = [
-  {
-    "constant": false,
-    "inputs": [],
-    "name": "deposit",
-    "outputs": [],
-    "payable": true,
-    "stateMutability": "payable",
-    "type": "function"
-  },
-  {
-    "constant": false,
-    "inputs": [{"name": "wad", "type": "uint256"}],
-    "name": "withdraw",
-    "outputs": [],
-    "payable": false,
-    "stateMutability": "nonpayable",
-    "type": "function"
-  }
+    // 查询余额
+    {
+        "constant": true,
+        "inputs": [{"name": "owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "balance", "type": "uint256"}],
+        "type": "function"
+    },
+    // deposit 函数
+    {
+        "constant": false,
+        "inputs": [],
+        "name": "deposit",
+        "outputs": [],
+        "payable": true,
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    // withdraw 函数
+    {
+        "constant": false,
+        "inputs": [{"name": "wad", "type": "uint256"}],
+        "name": "withdraw",
+        "outputs": [],
+        "type": "function"
+    },
+    // 转账函数
+    {
+        "constant": false,
+        "inputs": [
+            {"name": "dst", "type": "address"},
+            {"name": "wad", "type": "uint256"}
+        ],
+        "name": "transfer",
+        "outputs": [{"name": "", "type": "bool"}],
+        "type": "function"
+    }
 ];
 
 // 添加 encodePath 辅助函数
@@ -267,7 +354,7 @@ function SwapV3() {
 	const chainId = useChainId();
 	console.log("当前网络: " + chainId);
 	const [messageApi, contextHolder] = message.useMessage();
-	const [slippage, setSlippage] = useState(2.5);
+	const [slippage, setSlippage] = useState(0.5);
 	const [tokenOneAmount, setTokenOneAmount] = useState(null);
 	const [tokenTwoAmount, setTokenTwoAmount] = useState(null);
 
@@ -612,7 +699,7 @@ function SwapV3() {
 		// 根据价格影响程度给出警告
 		if (priceImpact > 5) {
 			messageApi.warning(
-				`大���交易警告：此笔交易将导致 ${priceImpact}% 的价格影响`
+				`大交易警告：此笔交易将导致 ${priceImpact}% 的价格影响`
 			);
 		}
 
@@ -751,6 +838,110 @@ function SwapV3() {
 		}
 	}
 
+	// 添加 ERC20 gas 估算工具函数
+async function estimateERC20GasCost(
+    tokenAddress,
+    fromAddress,
+    toAddress,
+    amount,
+    provider
+) {
+    try {
+        console.log("开始估算 ERC20 交易 gas 费用...");
+        console.log("参数:", {
+            token: tokenAddress,
+            from: fromAddress,
+            to: toAddress,
+            amount: amount.toString()
+        });
+
+        // 1. 创建代币合约实例
+        const tokenContract = new ethers.Contract(
+            tokenAddress,
+            ERC20_ABI,
+            provider
+        );
+
+        // 2. 获取代币信息
+        const [symbol, decimals] = await Promise.all([
+            tokenContract.symbol(),
+            tokenContract.decimals()
+        ]);
+
+        console.log("代币信息:", {
+            symbol,
+            decimals: decimals.toString()
+        });
+
+        // 3. 估算 transfer 的 gas 限制
+        let gasLimit;
+        try {
+            gasLimit = await tokenContract.estimateGas.transfer(toAddress, amount, {
+                from: fromAddress
+            });
+            console.log("估算的 gas 限制:", gasLimit.toString());
+        } catch (error) {
+            console.warn("常规 gas 估算失败，使用静态调用...", error);
+
+            // 尝试静态调用
+            await tokenContract.callStatic.transfer(toAddress, amount, {
+                from: fromAddress
+            });
+            // 如果静态调用成功，使用默认值
+            gasLimit = ethers.BigNumber.from("65000"); // ERC20 transfer 的典型值
+        }
+
+        // 4. 获取当前 gas 价格信息
+        const [gasPrice, feeData] = await Promise.all([
+            provider.getGasPrice(),
+            provider.getFeeData()
+        ]);
+
+        // 5. 增加 gas 限制缓冲
+        const gasLimitWithBuffer = gasLimit.mul(120).div(100); // 增加 20% 缓冲
+
+        // 6. 计算预估费用
+        const estimatedCost = {
+            // 传统 gas 价格估算
+            legacy: gasLimitWithBuffer.mul(gasPrice),
+            // EIP-1559 估算
+            eip1559: feeData.maxFeePerGas ? 
+                gasLimitWithBuffer.mul(feeData.maxFeePerGas) : null
+        };
+
+        // 7. 准备详细的估算结果
+        const estimation = {
+            gasLimit: gasLimitWithBuffer,
+            gasPrice,
+            maxFeePerGas: feeData.maxFeePerGas,
+            maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+            estimatedCost,
+            details: {
+                token: {
+                    address: tokenAddress,
+                    symbol,
+                    decimals
+                },
+                gasPriceGwei: ethers.utils.formatUnits(gasPrice, "gwei"),
+                maxFeePerGasGwei: feeData.maxFeePerGas ? 
+                    ethers.utils.formatUnits(feeData.maxFeePerGas, "gwei") : null,
+                estimatedCostEth: {
+                    legacy: ethers.utils.formatEther(estimatedCost.legacy),
+                    eip1559: estimatedCost.eip1559 ? 
+                        ethers.utils.formatEther(estimatedCost.eip1559) : null
+                }
+            }
+        };
+
+        console.log("ERC20 交易 gas 估算结果:", estimation.details);
+
+        return estimation;
+    } catch (error) {
+        console.error("ERC20 gas 估算失败:", error);
+        throw new Error("无法估算 ERC20 交易 gas 费用: " + error.message);
+    }
+}
+
 	// 2. 使用 ethers 执行交易的函数
 	async function executeSwap(routerAddress, swapParams) {
 		try {
@@ -759,215 +950,121 @@ function SwapV3() {
 				throw new Error("无效的路由合约地址");
 			}
 
-			if (!swapParams || !swapParams.path || !swapParams.amountIn) {
-				throw new Error("无效的交易参数");
-			}
-
-			console.log("交易参数:", {
-				routerAddress,
-				path: swapParams.path,
-				recipient: swapParams.recipient,
-				deadline: new Date(swapParams.deadline * 1000).toLocaleString(),
-				amountIn: swapParams.amountIn,
-				amountOutMinimum: swapParams.amountOutMinimum,
-			});
-
 			// 2. 获取 provider 和 signer
-			// 添加参数详细检查
-			const provider = new ethers.providers.Web3Provider(window.ethereum);
+			// const provider = new ethers.providers.Web3Provider(window.ethereum);
+			const provider = getProvider(true);
 			const signer = await provider.getSigner();
-			const routerContract = new ethers.Contract(
-				routerAddress,
-				ROUTER_ABI,
-				signer
-			);
+			const routerContract = new ethers.Contract(routerAddress, ROUTER_ABI, signer);
 
-			// 解码路径参数
-			console.log("Path 解码:", {
-				rawPath: swapParams.path,
-				hexLength: swapParams.path.length,
-				// 尝试解析路径中的地址
-				addresses: swapParams.path.match(/.{1,40}/g),
-			});
-
-			// 检查代币余额
-			const tokenContract = new ethers.Contract(
+			console.log("开始估算 gas");
+			const transferGasEstimation = await estimateERC20GasCost(
 				tokenOne.address,
-				ERC20_ABI,
+				account.address,
+				routerAddress,
+				swapParams.amountIn,
 				provider
 			);
-			const balance = await tokenContract.balanceOf(account.address);
-			console.log("代币余额检查:", {
-				balance: ethers.utils.formatUnits(balance, tokenOne.decimals),
-				required: ethers.utils.formatUnits(
-					swapParams.amountIn,
-					tokenOne.decimals
-				),
-			});
 
-			// 检查授权状态
-			const allowance = await tokenContract.allowance(
-				account.address,
-				routerAddress
-			);
-			console.log("授权状态检查:", {
-				allowance: ethers.utils.formatUnits(allowance, tokenOne.decimals),
-				required: ethers.utils.formatUnits(
-					swapParams.amountIn,
-					tokenOne.decimals
-				),
-			});
-
-			// 构建并打印完整的调用数据
-			const callData = routerContract.interface.encodeFunctionData(
-				"exactInput",
-				[swapParams]
-			);
-			console.log("编码后的调用数据:", {
-				callData,
-				decodedParams: routerContract.interface.decodeFunctionData(
-					"exactInput",
-					callData
-				),
-			});
-
-			// 尝试模拟交易
-			// try {
-			// 	const result = await provider.call({
-			// 		to: routerAddress,
-			// 		data: callData,
-			// 		from: account.address,
-			// 	});
-			// 	console.log("模拟交易成功:", result);
-			// } catch (error) {
-			// 	console.error("模拟交易失败:", error);
-			// 	// 尝试解码错误
-			// 	if (error.data) {
-			// 		try {
-			// 			const iface = new ethers.utils.Interface([
-			// 				"error InsufficientInputAmount()",
-			// 				"error InvalidPath()",
-			// 				"error TooLittleReceived()",
-			// 				"error DeadlineExpired()",
-			// 				// 添加其他可能的错误
-			// 			]);
-			// 			const decodedError = iface.parseError(error.data);
-			// 			throw new Error(`合约错误: ${decodedError.name}`);
-			// 		} catch (e) {
-			// 			console.error("无法解码错误:", e);
-			// 		}
+			console.log("Transfer gas 估算:", transferGasEstimation);
+			// transferGasEstimation.details:
+			// {
+			// 	"token": {
+			// 		"address": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
+			// 		"symbol": "WETH",
+			// 		"decimals": 18
+			// 	},
+			// 	"gasPriceGwei": "2.565821774",
+			// 	"maxFeePerGasGwei": "6.648612838",
+			// 	"estimatedCostEth": {
+			// 		"legacy": "0.00016003030404438",
+			// 		"eip1559": "0.00041467398270606"
 			// 	}
+			// }
+
+			// 1. 检查 WETH 余额
+			const wethContract = new ethers.Contract(
+				tokenOne.address,  // WETH 地址
+				WETH_ABI,
+				provider
+			);
+			const wethBalance = await wethContract.balanceOf(account.address);
+			const amountIn = ethers.BigNumber.from(swapParams.amountIn);
+			
+			console.log("WETH 余额检查:", {
+				balance: ethers.utils.formatEther(wethBalance) + " WETH",
+				required: ethers.utils.formatEther(amountIn) + " WETH"
+			});
+	
+			if (wethBalance.lt(amountIn)) {
+				throw new Error(`WETH 余额不足: 需要 ${ethers.utils.formatEther(amountIn)} WETH`);
+			}
+
+			// 检查是否使用原生 ETH
+			const isNativeETH = false;
+
+			// 设置交易参数
+			const txParams = {
+				gasLimit: transferGasEstimation.gasLimit,
+				gasPrice: transferGasEstimation.gasPrice.mul(120).div(100), // 增加 20% gas 价格
+			};
+
+			// 如果使用原生 ETH，设置 value
+			if (isNativeETH) {
+				txParams.value = swapParams.amountIn;
+				console.log("使用原生 ETH，设置 value:", ethers.utils.formatEther(swapParams.amountIn));
+			} else {
+				txParams.value = ethers.constants.Zero;
+				console.log("使用 WETH，value 设置为 0");
+			}
+	
+			console.log("交易参数:", {
+				...txParams,
+				value: ethers.utils.formatEther(txParams.value) + " ETH"
+			});
+
+			// 4. 模拟交易
+			// try {
+			// 	await routerContract.callStatic.exactInput(swapParams, {
+			// 		from: account.address,
+			// 		...txParams
+			// 	});
+			// 	console.log("交易模拟成功");
+			// } catch (error) {
+			// 	console.error("交易模拟失败:", error);
 			// 	throw new Error("交易模拟失败: " + (error.reason || error.message));
 			// }
 
-			// 5. 估算 gas
-			// let gasEstimate;
-			// try {
-			// 	gasEstimate = await routerContract.estimateGas.exactInput(swapParams);
-			// 	console.log("预估 gas:", gasEstimate.toString());
-			// } catch (error) {
-			// 	console.error("Gas 估算失败:", error);
-			// 	// 尝试解码错误
-			// 	if (error.data) {
-			// 		const iface = new ethers.utils.Interface(ROUTER_ABI);
-			// 		try {
-			// 			const decoded = iface.parseError(error.data);
-			// 			throw new Error(`合约错误: ${decoded.name}`);
-			// 		} catch (e) {
-			// 			// 如果解码失败，抛出原始错误
-			// 			throw error;
-			// 		}
-			// 	}
-			// 	throw new Error("无法估算 gas 费用");
-			// }
+			console.log("发送交易...");
+			// 6. 发送交易
+			const tx = await routerContract.exactInput(swapParams, txParams);
 
-			// // 6. 获取当前 gas 价格
-			// const gasPrice = await provider.getGasPrice();
-			// console.log(
-			// 	"当前 gas 价格:",
-			// 	ethers.utils.formatUnits(gasPrice, "gwei"),
-			// 	"gwei"
-			// );
-
-			// 估算 gas
-			// const gasEstimate = await routerContract.estimateGas.exactInput(
-			// 	swapParams,
-			// 	{ value: 0 }
-			// );
-
-			// console.log("Estimated gas:", gasEstimate.toString());
-
-			// 增加 20% 的 gas 限制作为缓冲
-			// const gasLimit = gasEstimate.mul(120).div(100);
-
-			// 发送交易
-			const tx = await routerContract.exactInput(
-				swapParams,
-				{
-					gasLimit: 50000,
-					value: 0
-				}
-			);
-
-			console.log("Transaction sent:", tx.hash);
+			console.log("交易已发送:", tx.hash);
 			messageApi.info("交易已发送，等待确认...");
 
-			// 等待交易确认
+			// 7. 等待交易确认
 			const receipt = await tx.wait(1);
 
-			// 检查交易状态
+			// 8. 检查交易状态
 			if (receipt.status === 0) {
-				throw new Error("Transaction failed");
+				// 交易失败，尝试获取更多信息
+				const txResponse = await provider.getTransaction(receipt.transactionHash);
+				const code = await provider.call(
+					{
+						to: txResponse.to,
+						from: txResponse.from,
+						data: txResponse.data,
+						value: txResponse.value,
+						gasLimit: txResponse.gasLimit,
+						gasPrice: txResponse.gasPrice,
+					},
+					receipt.blockNumber
+				);
+				throw new Error(`交易失败: ${code}`);
 			}
 
-			console.log("Transaction confirmed:", receipt);
+			console.log("交易成功:", receipt);
 			return receipt;
 
-			// // 7. 构建交易对象
-			// const txRequest = {
-			// 	to: routerAddress,
-			// 	from: await signer.getAddress(),
-			// 	data: routerContract.interface.encodeFunctionData("exactInput", [
-			// 		swapParams,
-			// 	]),
-			// 	gasLimit: gasEstimate.mul(120).div(100), // 增加 20% 的 gas 限制
-			// 	gasPrice: gasPrice,
-			// 	value: 0, // 如果不是 ETH 交易，设为 0
-			// };
-
-			// console.log("交易请求:", {
-			// 	...txRequest,
-			// 	gasLimit: txRequest.gasLimit.toString(),
-			// 	gasPrice: txRequest.gasPrice.toString(),
-			// });
-
-			// // 8. 发送交易
-			// let tx;
-			// try {
-			// 	tx = await signer.sendTransaction(txRequest);
-			// 	console.log("交易已发送:", tx.hash);
-			// } catch (error) {
-			// 	console.error("发送交易失败:", error);
-			// 	throw new Error("发送交易失败: " + (error.reason || error.message));
-			// }
-
-			// // 9. 等待交易确认
-			// console.log("等待交易确认...");
-			// const receipt = await tx.wait(1);
-
-			// // 10. 验证交易结果
-			// if (receipt.status === 0) {
-			// 	throw new Error("交易执行失败");
-			// }
-
-			// console.log("交易成功:", {
-			// 	transactionHash: receipt.transactionHash,
-			// 	blockNumber: receipt.blockNumber,
-			// 	gasUsed: receipt.gasUsed.toString(),
-			// 	effectiveGasPrice: receipt.effectiveGasPrice.toString(),
-			// });
-
-			// return receipt;
 		} catch (error) {
 			console.error("Swap execution error:", error);
 
@@ -983,6 +1080,7 @@ function SwapV3() {
 				errorMessage = "用户取消了交易";
 			}
 
+			messageApi.error(errorMessage);
 			throw new Error(errorMessage);
 		}
 	}
